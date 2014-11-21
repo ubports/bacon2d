@@ -120,19 +120,22 @@ void ContactListener::PostSolve(b2Contact *contact, const b2ContactImpulse *impu
     emit mWorld->postSolve(&mContact);
 }
 
-Box2DWorld::Box2DWorld(QQuickItem *parent) :
-    QQuickItem(parent),
+Box2DWorld::Box2DWorld(QObject *parent) :
+    QObject(parent),
     mWorld(b2Vec2(0.0f, -10.0f)),
-    mContactListener(new ContactListener(this)),
+    mContactListener(0),
     mTimeStep(1.0f / 60.0f),
     mVelocityIterations(8),
     mPositionIterations(3),
+    mComponentComplete(false),
     mIsRunning(true),
+    mSynchronizing(false),
     mStepDriver(new StepDriver(this)),
     mProfile(new Box2DProfile(&mWorld, this)),
+    mEnableContactEvents(true),
     mPixelsPerMeter(32.0f)
+
 {
-    mWorld.SetContactListener(mContactListener);
     mWorld.SetDestructionListener(this);
 }
 
@@ -145,9 +148,6 @@ Box2DWorld::~Box2DWorld()
         toBox2DBody(body)->nullifyBody();
     for (b2Joint *joint = mWorld.GetJointList(); joint; joint = joint->GetNext())
         toBox2DJoint(joint)->nullifyJoint();
-
-    mWorld.SetContactListener(0);
-    delete mContactListener;
 }
 
 void Box2DWorld::setTimeStep(float timeStep)
@@ -166,7 +166,7 @@ void Box2DWorld::setRunning(bool running)
     mIsRunning = running;
     emit runningChanged();
 
-    if (isComponentComplete()) {
+    if (mComponentComplete) {
         if (running)
             mStepDriver->start();
         else
@@ -214,6 +214,27 @@ void Box2DWorld::setAutoClearForces(bool autoClearForces)
     emit autoClearForcesChanged();
 }
 
+void Box2DWorld::setEnableContactEvents(bool enableContactEvents)
+{
+    if(enableContactEvents == mEnableContactEvents)
+        return;
+    mEnableContactEvents = enableContactEvents;
+    enableContactListener(mEnableContactEvents);
+
+    emit enableContactEventsChanged();
+}
+
+void Box2DWorld::enableContactListener(bool enable)
+{
+    if (enable) {
+        mContactListener = new ContactListener(this);
+        mWorld.SetContactListener(mContactListener);
+    } else {
+        mWorld.SetContactListener(0);
+        delete mContactListener;
+    }
+}
+
 void Box2DWorld::setPixelsPerMeter(float pixelsPerMeter)
 {
     if (pixelsPerMeter <= 0.0f) {
@@ -227,13 +248,16 @@ void Box2DWorld::setPixelsPerMeter(float pixelsPerMeter)
     }
 }
 
+void Box2DWorld::classBegin()
+{
+}
+
 void Box2DWorld::componentComplete()
 {
-    QQuickItem::componentComplete();
+    mComponentComplete = true;
 
-    initializeBodies(this);
+    enableContactListener(mEnableContactEvents);
 
-    emit initialized();
     if (mIsRunning)
         mStepDriver->start();
 }
@@ -248,48 +272,60 @@ void Box2DWorld::SayGoodbye(b2Joint *joint)
 
 void Box2DWorld::SayGoodbye(b2Fixture *fixture)
 {
-    Box2DFixture *f = toBox2DFixture(fixture);
+    if (mEnableContactEvents) {
+        Box2DFixture *f = toBox2DFixture(fixture);
 
-    QList<ContactEvent> events = mContactListener->events();
-    for (int i = events.count() - 1; i >= 0; i--) {
-        if (events.at(i).fixtureA == f || events.at(i).fixtureB == f)
-            mContactListener->removeEvent(i);
+        QList<ContactEvent> events = mContactListener->events();
+        for (int i = events.count() - 1; i >= 0; i--) {
+            if(events.at(i).fixtureA == f || events.at(i).fixtureB == f)
+                mContactListener->removeEvent(i);
+        }
     }
 }
 
 void Box2DWorld::step()
 {
+    // Update Box2D state before stepping
+    for (b2Body *body = mWorld.GetBodyList(); body; body = body->GetNext()) {
+        Box2DBody *b = toBox2DBody(body);
+        if (b->transformDirty() && b->isActive())
+            b->updateTransform();
+    }
+
     mWorld.Step(mTimeStep, mVelocityIterations, mPositionIterations);
 
-    for (b2Body *body = mWorld.GetBodyList(); body; body = body->GetNext())
-        toBox2DBody(body)->synchronize();
+    b2Timer timer;
 
-    // Emit contact signals
-    foreach (const ContactEvent &event, mContactListener->events()) {
-        switch (event.type) {
-        case ContactEvent::BeginContact:
-            emit event.fixtureA->beginContact(event.fixtureB);
-            emit event.fixtureB->beginContact(event.fixtureA);
-            break;
-        case ContactEvent::EndContact:
-            emit event.fixtureA->endContact(event.fixtureB);
-            emit event.fixtureB->endContact(event.fixtureA);
-            break;
+    // Update QML state after stepping
+    mSynchronizing = true;
+    for (b2Body *body = mWorld.GetBodyList(); body; body = body->GetNext()) {
+        Box2DBody *b = toBox2DBody(body);
+        if (b->isActive() && b->bodyType() != Box2DBody::Static && b->target())
+            b->synchronize();
+    }
+    mSynchronizing = false;
+
+    mProfile->mSynchronize = timer.GetMilliseconds();
+    timer.Reset();
+
+    if (mEnableContactEvents) {
+        // Emit contact signals
+        foreach (const ContactEvent &event, mContactListener->events()) {
+            switch (event.type) {
+            case ContactEvent::BeginContact:
+                emit event.fixtureA->beginContact(event.fixtureB);
+                emit event.fixtureB->beginContact(event.fixtureA);
+                break;
+            case ContactEvent::EndContact:
+                emit event.fixtureA->endContact(event.fixtureB);
+                emit event.fixtureB->endContact(event.fixtureA);
+                break;
+            }
         }
     }
     mContactListener->clearEvents();
 
-    // Emit signals for the current state of the contacts
-    b2Contact *contact = mWorld.GetContactList();
-    while (contact) {
-        Box2DFixture *fixtureA = toBox2DFixture(contact->GetFixtureA());
-        Box2DFixture *fixtureB = toBox2DFixture(contact->GetFixtureB());
-
-        emit fixtureA->contactChanged(fixtureB);
-        emit fixtureB->contactChanged(fixtureA);
-
-        contact = contact->GetNext();
-    }
+    mProfile->mEmitSignals = timer.GetMilliseconds();
 
     emit stepped();
 }
@@ -299,27 +335,4 @@ void Box2DWorld::rayCast(Box2DRayCast *rayCast,
                          const QPointF &point2)
 {
     mWorld.RayCast(rayCast, toMeters(point1), toMeters(point2));
-}
-
-void Box2DWorld::itemChange(ItemChange change, const ItemChangeData &value)
-{
-    if (isComponentComplete()) {
-        if (change == ItemChildAddedChange) {
-            QObject *child = value.item;
-            if (Box2DBody *body = dynamic_cast<Box2DBody*>(child))
-                body->initialize(this);
-        }
-    }
-
-    QQuickItem::itemChange(change, value);
-}
-
-void Box2DWorld::initializeBodies(QQuickItem *parent)
-{
-    foreach (QQuickItem *item, parent->childItems()) {
-        if (Box2DBody *body = dynamic_cast<Box2DBody *>(item))
-            body->initialize(this);
-
-        initializeBodies(item);
-    }
 }

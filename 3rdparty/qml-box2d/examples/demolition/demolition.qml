@@ -1,5 +1,6 @@
 import QtQuick 2.0
-import Box2D 1.1
+import Box2D 2.0
+import "../shared"
 
 Image {
     id: screen;
@@ -19,50 +20,52 @@ Image {
     // A wheel that will be created dynamically
     Component {
         id: wheelComponent
-        Body {
-            id: wheelBody
-            sleepingAllowed: true
-			bodyType: Body.Dynamic
-			width:80
-			height:80
-            fixtures: Circle {
-                id: circle
-                radius: 40
+        Image {
+            id: wheel
+            transformOrigin: Item.TopLeft
+
+            smooth: true
+            source: "images/wheel.png"
+
+            CircleBody {
+                id: wheelBody
+
+                world: physicsWorld
+                target: wheel
+                bodyType: Body.Dynamic
+
                 density: 6
                 friction: 1.0
                 restitution: 0.6
-            }
-            Image {
-                id: circleRect
-                anchors.centerIn: parent
-                smooth: true
-                source: "images/wheel.png"
-                MouseArea {
-                    anchors.fill: parent
-                    onReleased: timer.running = false
-                    onPressed: {
-                        if(wheelBody.x < (world.width / 2)) {
-                            timer.clockwise = true
-                        }
-                        else {
-                            timer.clockwise = false
-                        }
 
-                        timer.running = true
+                radius: wheel.width / 2
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                onReleased: timer.running = false
+                onPressed: {
+                    if(wheel.x < (physicsRoot.width / 2)) {
+                        timer.clockwise = true
+                    }
+                    else {
+                        timer.clockwise = false
                     }
 
-                    Timer {
-                        id: timer
-                        property bool clockwise
-                        interval: 100
-                        repeat: true
-                        onTriggered: {
-                            if(clockwise) {
-                                wheelBody.applyTorque(-3000)
-                            }
-                            else {
-                                wheelBody.applyTorque(3000)
-                            }
+                    timer.running = true
+                }
+
+                Timer {
+                    id: timer
+                    property bool clockwise
+                    interval: 100
+                    repeat: true
+                    onTriggered: {
+                        if(clockwise) {
+                            wheelBody.applyTorque(-3000)
+                        }
+                        else {
+                            wheelBody.applyTorque(3000)
                         }
                     }
                 }
@@ -85,21 +88,22 @@ Image {
         anchors.fill: parent
 
         // Try to double the contentWidth..
-        contentWidth: world.width // * 2
-        contentHeight: world.height
+        contentWidth: physicsRoot.width // * 2
+        contentHeight: physicsRoot.height
 
+        World { id: physicsWorld }
 
-        World {
-            id: world
+        Item {
+            id: physicsRoot
             width: screen.width
             height: screen.height
 
             MouseArea {
                 anchors.fill: parent
                 onPressAndHold: {
-                    var wheel = wheelComponent.createObject(world)
-                    wheel.x = mouse.x
-                    wheel.y = mouse.y
+                    var wheel = wheelComponent.createObject(physicsRoot)
+                    wheel.x = mouse.x - wheel.width / 2
+                    wheel.y = mouse.y - wheel.height / 2
                 }
             }
 
@@ -172,6 +176,14 @@ Image {
                 }
             }
         }
+
+        DebugDraw {
+            id: debugDraw
+            anchors.fill: physicsRoot
+            world: world
+            opacity: 0.75
+            visible: false
+        }
     }
 
 
@@ -184,22 +196,15 @@ Image {
         fillMode: Image.PreserveAspectFit
         source: "images/plate.png"
         smooth: true
+        Behavior on scale {
+            PropertyAnimation { easing.type: Easing.OutCubic; duration: 100; }
+        }
         MouseArea {
             anchors.fill: parent
             scale: 1.4
-            Behavior on scale {
-                PropertyAnimation { duration: 100 }
-            }
             onClicked: Qt.quit()
             onPressed: parent.scale = 0.9
             onReleased: parent.scale = 1.0
         }
     }
-	DebugDraw {
-            id: debugDraw
-            anchors.fill: parent
-            world: world
-            opacity: 0.75
-            visible: false
-        }
 }
