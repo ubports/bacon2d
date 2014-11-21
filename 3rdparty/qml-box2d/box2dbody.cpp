@@ -34,11 +34,18 @@
 #include "box2dfixture.h"
 #include "box2dworld.h"
 
-// Helper method for synchronizing while detecting value changes
-template<typename T>
-static bool sync(T &value, const T &newValue)
+static bool sync(float &value, float newValue)
 {
-    if (value == newValue)
+    if (qFuzzyCompare(value, newValue))
+        return false;
+
+    value = newValue;
+    return true;
+}
+
+static bool sync(b2Vec2 &value, const b2Vec2 &newValue)
+{
+    if (qFuzzyCompare(value.x, newValue.x) && qFuzzyCompare(value.y, newValue.y))
         return false;
 
     value = newValue;
@@ -46,16 +53,15 @@ static bool sync(T &value, const T &newValue)
 }
 
 
-Box2DBody::Box2DBody(QQuickItem *parent) :
-    QQuickItem(parent),
-    mBody(0),
+Box2DBody::Box2DBody(QObject *parent) :
+    QObject(parent),
     mWorld(0),
-    mSynchronizing(false),
-    mInitializePending(false)
+    mTarget(0),
+    mBody(0),
+    mTransformDirty(false),
+    mCreatePending(false)
 {
     mBodyDef.userData = this;
-
-    setTransformOrigin(TopLeft);
 }
 
 Box2DBody::~Box2DBody()
@@ -221,7 +227,6 @@ void Box2DBody::append_fixture(QQmlListProperty<Box2DFixture> *list,
                                Box2DFixture *fixture)
 {
     Box2DBody *body = static_cast<Box2DBody*>(list->object);
-    fixture->setParentItem(body);
     body->mFixtures.append(fixture);
 }
 
@@ -239,26 +244,31 @@ Box2DFixture *Box2DBody::at_fixture(QQmlListProperty<Box2DFixture> *list, int in
 
 void Box2DBody::addFixture(Box2DFixture *fixture)
 {
-    fixture->setParentItem(this);
     mFixtures.append(fixture);
     if (mBody)
         fixture->initialize(this);
 }
 
-void Box2DBody::initialize(Box2DWorld *world)
+void Box2DBody::createBody()
 {
-    mWorld = world;
-    if (!isComponentComplete()) {
+    if (!mWorld)
+        return;
+
+    if (!mComponentComplete) {
         // When components are created dynamically, they get their parent
         // assigned before they have been completely initialized. In that case
         // we need to delay initialization.
-        mInitializePending = true;
+        mCreatePending = true;
         return;
     }
-    mBodyDef.position = mWorld->toMeters(position());
-    mBodyDef.angle = toRadians(rotation());
+
+    if (mTarget) {
+        mBodyDef.position = mWorld->toMeters(mTarget->position());
+        mBodyDef.angle = toRadians(mTarget->rotation());
+    }
     mBody = mWorld->world().CreateBody(&mBodyDef);
-    mInitializePending = false;
+    mCreatePending = false;
+    mTransformDirty = false;
     foreach (Box2DFixture *fixture, mFixtures)
         fixture->initialize(this);
     emit bodyCreated();
@@ -270,46 +280,75 @@ void Box2DBody::initialize(Box2DWorld *world)
 void Box2DBody::synchronize()
 {
     Q_ASSERT(mBody);
-    mSynchronizing = true;
 
     if (sync(mBodyDef.position, mBody->GetPosition())) {
-        setPosition(mWorld->toPixels(mBodyDef.position));
+        if (mTarget)
+            mTarget->setPosition(mWorld->toPixels(mBodyDef.position));
         emit positionChanged();
     }
 
     if (sync(mBodyDef.angle, mBody->GetAngle()))
-        setRotation(toDegrees(mBodyDef.angle));
+        if (mTarget)
+            mTarget->setRotation(toDegrees(mBodyDef.angle));
+}
 
-    mSynchronizing = false;
+void Box2DBody::classBegin()
+{
 }
 
 void Box2DBody::componentComplete()
 {
-    QQuickItem::componentComplete();
+    mComponentComplete = true;
 
-    if (mInitializePending)
-        initialize(mWorld);
+    if (mCreatePending)
+        createBody();
 }
 
-void Box2DBody::geometryChanged(const QRectF &newGeometry,
-                                const QRectF &oldGeometry)
+void Box2DBody::setWorld(Box2DWorld *world)
 {
-    if (!mSynchronizing && mBody) {
-        if (newGeometry.topLeft() != oldGeometry.topLeft()) {
-            mBodyDef.position = mWorld->toMeters(newGeometry.topLeft());
-            mBody->SetTransform(mBodyDef.position, mBodyDef.angle);
-        }
+    if (mWorld == world)
+        return;
+
+    // Destroy body when leaving our previous world
+    if (mWorld && mBody) {
+        mWorld->world().DestroyBody(mBody);
+        mBody = 0;
     }
-    QQuickItem::geometryChanged(newGeometry, oldGeometry);
+
+    mWorld = world;
+    createBody();
 }
 
-void Box2DBody::itemChange(ItemChange change, const ItemChangeData &value)
+void Box2DBody::setTarget(QQuickItem *target)
 {
-    if (change == ItemRotationHasChanged && !mSynchronizing && mBody) {
-        mBodyDef.angle = toRadians(value.realValue);
-        mBody->SetTransform(mBodyDef.position, mBodyDef.angle);
+    if (mTarget == target)
+        return;
+
+    if (mTarget)
+        mTarget->disconnect(this);
+
+    mTarget = target;
+    mTransformDirty = target != 0;
+
+    if (target) {
+        connect(target, SIGNAL(xChanged()), this, SLOT(markTransformDirty()));
+        connect(target, SIGNAL(yChanged()), this, SLOT(markTransformDirty()));
+        connect(target, SIGNAL(rotationChanged()), this, SLOT(markTransformDirty()));
     }
-    QQuickItem::itemChange(change, value);
+
+    emit targetChanged();
+}
+
+void Box2DBody::updateTransform()
+{
+    Q_ASSERT(mTarget);
+    Q_ASSERT(mBody);
+    Q_ASSERT(mTransformDirty);
+
+    mBodyDef.position = mWorld->toMeters(mTarget->position());
+    mBodyDef.angle = toRadians(mTarget->rotation());
+    mBody->SetTransform(mBodyDef.position, mBodyDef.angle);
+    mTransformDirty = false;
 }
 
 void Box2DBody::applyLinearImpulse(const QPointF &impulse,
@@ -413,4 +452,9 @@ QPointF Box2DBody::getLinearVelocityFromLocalPoint(const QPointF &point) const
     if (mBody)
         return invertY(mBody->GetLinearVelocityFromLocalPoint(mWorld->toMeters(point)));
     return QPointF();
+}
+
+void Box2DBody::markTransformDirty()
+{
+    mTransformDirty = mTransformDirty || (mWorld && !mWorld->isSynchronizing());
 }
