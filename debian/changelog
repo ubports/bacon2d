@@ -1,3 +1,12 @@
+bacon2d (0.90.4-0ubuntu1) vivid; urgency=medium
+
+  * New upstream release.
+  * debian/rules
+    - Don't install tests
+    - Ensure plugins.qmltypes file gets installed
+
+ -- Ken VanDine <ken.vandine@canonical.com>  Thu, 19 Feb 2015 11:05:36 -0500
+
 bacon2d (0.90.3-0ubuntu1) vivid; urgency=medium
 
   * New upstream release.
