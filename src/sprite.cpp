@@ -20,8 +20,8 @@
  * @author Roger Felipe Zanoni da Silva <roger.zanoni@openbossa.org>
  */
 
-#include "sprite.h"
 #include "scene.h"
+#include "sprite.h"
 #include "spritesheet.h"
 #include "spriteanimation.h"
 #include "animationchangeevent.h"
@@ -48,10 +48,12 @@ void Sprite::append_animation(QQmlListProperty<SpriteAnimation> *list, SpriteAni
 Sprite::Sprite(QQuickItem *parent)
     : QQuickItem(parent)
     , m_entity(0)
+    , m_game(0)
     , m_stateMachine(0)
     , m_stateGroup(0)
     , m_verticalMirror(false)
     , m_horizontalMirror(false)
+    , m_state(Bacon2D::Running)
 {
 }
 
@@ -73,6 +75,11 @@ void Sprite::setAnimation(const QString &animation, const bool &force)
 {
     if (!m_states.contains(animation)) {
         qWarning() << "SpriteAnimation:" << animation << "invalid";
+        return;
+    }
+
+    if (m_state == Bacon2D::Paused || m_state == Bacon2D::Suspended) {
+        qWarning() << "SpriteAnimation: isn't active";
         return;
     }
 
@@ -122,7 +129,7 @@ void Sprite::initializeMachine()
 void Sprite::initializeAnimation()
 {
     if (m_animation != QString())
-        setAnimation(m_animation, true);
+        setAnimation(m_animation, (m_state == Bacon2D::Running));
 }
 
 /*!
@@ -180,6 +187,44 @@ void Sprite::setEntity(Entity *entity)
         return;
 
     m_entity = entity;
-
+    if (!m_game) {
+        m_game = m_entity->scene()->game();
+        connect(m_game, SIGNAL(gameStateChanged()), this, SLOT(onGameStateChanged()));
+    }
     emit entityChanged();
+}
+
+void Sprite::onGameStateChanged()
+{
+    if (m_state != Bacon2D::Inactive)
+        this->setSpriteState(m_game->gameState());
+}
+
+/*!
+  \qmlproperty Bacon2D.State Sprite::spriteState
+  \brief This property holds the current spriteState.
+*/
+void Sprite::setSpriteState(const Bacon2D::State &state)
+{
+    if (state == m_state)
+        return;
+
+    m_state = state;
+
+    if (m_animation != QString() && m_states.contains(m_animation)) {
+        SpriteAnimation *animationItem = m_states[m_animation];
+        animationItem->setRunning(m_state == Bacon2D::Running);
+        if (m_state == Bacon2D::Running || m_state == Bacon2D::Paused)
+            animationItem->setVisible(true);
+    }
+
+    emit spriteStateChanged();
+
+    if (!m_stateMachine)
+        return;
+
+    if (m_state == Bacon2D::Running && !m_stateMachine->isRunning())
+        m_stateMachine->start();
+    else if (m_state != Bacon2D::Running && m_stateMachine->isRunning())
+        m_stateMachine->stop();
 }
