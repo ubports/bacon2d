@@ -1,6 +1,10 @@
 bacon2d (0.90.5-0ubuntu1) UNRELEASED; urgency=medium
 
   * New upstream release.
+    - Gracefully quit on SIGTERM, SIGHUP, SIGKILL, SIGINT
+    - qml-box2d bug fixes
+  * debian/copyright
+    - Updated license information
 
  -- Ken VanDine <ken.vandine@canonical.com>  Thu, 19 Mar 2015 14:49:48 -0400
 
