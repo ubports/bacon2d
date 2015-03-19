@@ -10,6 +10,7 @@
 override_dh_auto_install:
 	dh_auto_install
 	rm -rf debian/*/usr/tests
+	rm -rf debian/*/usr/lib/*/qt5/examples
 	cp -p src/imports/Bacon2D/plugins.qmltypes debian/*/usr/lib/*/qt5/qml/Bacon2D.1.0/
 
 override_dh_auto_test:
