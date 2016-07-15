@@ -1,3 +1,10 @@
+bacon2d (0.90.7.1-0ubuntu1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+    - cross build fixes
+
+ -- Ken VanDine <ken.vandine@canonical.com>  Fri, 15 Jul 2016 11:06:27 -0400
+
 bacon2d (0.90.7-0ubuntu1) xenial; urgency=medium
 
   * New upstream release.
